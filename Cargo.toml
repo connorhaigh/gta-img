@@ -1,0 +1,12 @@
+[package]
+name = "gta-img-cli"
+authors = ["Connor Haigh"]
+description = "gta-img-util is a command-line application using the gta-img library for manipulating 3D-universe Grand Theft Auto IMG/DIR files."
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+gta-img = { path = "gta-img" }
+clap = { version = "4.5.4", features = ["derive"] }
