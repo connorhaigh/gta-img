@@ -8,13 +8,12 @@ GTA-IMG is a Rust-based library for reading from `IMG` archives used throughout 
 let img = File::open("gta3.img").expect("failed to open img");
 let dir = File::open("gta3.dir").expect("failed to open dir");
 
-gta_img::read_v1(dir, img)
+gta_img::read(gta_img::Version::V1 { dir, img, })
 	.expect("failed to read archive")
-	.for_each(|result| match result {
-		Ok(entry) => println!("successfully read entry: {}; {} offset, {} length", entry.name, entry.off, entry.len),
-		Err(err) => println!("failed to read entry: {}", err)
+	.entries()
+	.for_each(|entry_info| {
+		println!("entry info: {}; {} offset, {} length", entry_info.name, entry_info.off, entry_info.len);
 	});
-let
 ```
 
 ## Support

@@ -1,218 +1,203 @@
-use std::{
-	cell::RefCell,
-	io::{self, Read, Seek},
-	rc::{Rc, Weak},
-};
+use std::io::{self, Read, Seek};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::error::ReadError;
 
-/// Represents the structure for a version 2-style header.
+/// Represents the structure for a V2-style header.
 pub const VERSION_2_HEADER: [u8; 4] = [0x56, 0x45, 0x52, 0x32]; // VER2
-pub const VERSION_2_HEADER_SIZE: usize = VERSION_2_HEADER.len();
+
+/// Represents the length of the structure for a V2-style header; always `4`.
+pub const VERSION_2_HEADER_SIZE: usize = 4;
 
 /// Represents the number of bytes used for sector alignment.
-pub const SECTOR_SIZE: u64 = 2048;
+const SECTOR_SIZE: u64 = 2048;
 
 /// Represents the maximum length of the name of an entry.
-pub const NAME_SIZE: usize = 24;
+const NAME_SIZE: usize = 24;
 
-/// Represents an individual entry.
-pub struct Entry<R>
-where
-	R: Read + Seek,
-{
-	/// The name of the entry, up to a maximum of 24 characters.
-	pub name: String,
+/// Represents an archive.
+pub struct Archive<'a, R> {
+	inner: &'a mut R,
 
-	/// The absolute offset of the entry.
-	pub off: u64,
-
-	/// The absolute length of the entry.
-	pub len: u64,
-
-	inner: Weak<RefCell<R>>,
+	entries: Vec<Entry>,
 }
 
-/// Represents a V1-styled reader, where the directory file for indices and the image file for data are separate files.
-pub struct V1Read<D, I>
+/// Represents an entry opened for reading.
+pub struct EntryRead<'a, R> {
+	inner: &'a mut R,
+
+	off: u64,
+	len: u64,
+}
+
+/// Represents an entry.
+pub struct Entry {
+	/// The name of the entry, up to 24 characters.
+	pub name: String,
+
+	/// The offset, in sectors, of the entry.
+	pub off: u64,
+
+	/// The length, in sectors, of the entry.
+	pub len: u64,
+}
+
+/// Represents a reader of V1-styled archives.
+pub struct V1Reader<'a, D, I> {
+	dir: &'a mut D,
+	img: &'a mut I,
+}
+
+/// Represents a reader of V2-styled archives.
+pub struct V2Reader<'a, I> {
+	img: &'a mut I,
+}
+
+impl<'a, D, I> V1Reader<'a, D, I> {
+	/// Creates a new V1-styled reader with the specified `dir` source and specified `img` source.
+	pub fn new(dir: &'a mut D, img: &'a mut I) -> Self {
+		Self {
+			dir,
+			img,
+		}
+	}
+}
+
+impl<'a, I> V2Reader<'a, I> {
+	/// Creates a new V2-styled reader with the specified `img` source.
+	pub fn new(img: &'a mut I) -> Self {
+		Self {
+			img,
+		}
+	}
+}
+
+impl<'a, D, I> TryInto<Archive<'a, I>> for V1Reader<'a, D, I>
 where
 	D: Read,
 	I: Read + Seek,
 {
-	dir: Rc<RefCell<D>>,
-	img: Rc<RefCell<I>>,
+	type Error = ReadError;
+
+	fn try_into(self) -> Result<Archive<'a, I>, Self::Error> {
+		let mut entries: Vec<Entry> = Vec::new();
+
+		loop {
+			let off = match self.dir.read_u32::<LittleEndian>() {
+				Ok(off) => off as u64,
+				Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
+				Err(err) => return Err(err.into()),
+			};
+
+			let len = self.dir.read_u32::<LittleEndian>()? as u64;
+			let name = {
+				let mut buf = [0; NAME_SIZE];
+
+				self.dir.read_exact(&mut buf)?;
+
+				to_name(buf)
+			};
+
+			entries.push(Entry {
+				name,
+				off,
+				len,
+			})
+		}
+
+		Ok(Archive {
+			inner: self.img,
+			entries,
+		})
+	}
 }
 
-/// Represents a V2-styled reader, where the indices and the data are the same file.
-pub struct V2Read<I>
+impl<'a, I> TryInto<Archive<'a, I>> for V2Reader<'a, I>
 where
 	I: Read + Seek,
 {
-	idx: usize,
-	len: usize,
+	type Error = ReadError;
 
-	img: Rc<RefCell<I>>,
+	fn try_into(self) -> Result<Archive<'a, I>, Self::Error> {
+		let header = {
+			let mut buffer = [0; VERSION_2_HEADER_SIZE];
+
+			self.img.read_exact(&mut buffer)?;
+
+			buffer
+		};
+
+		if header != VERSION_2_HEADER {
+			return Err(ReadError::InvalidHeader);
+		}
+
+		let count = self.img.read_u32::<LittleEndian>()? as usize;
+		let mut entries: Vec<Entry> = Vec::with_capacity(count);
+
+		for _ in 0..count {
+			let off = self.img.read_u32::<LittleEndian>()? as u64;
+			let len = self.img.read_u16::<LittleEndian>()? as u64;
+
+			let _ = self.img.read_u16::<LittleEndian>()?;
+
+			let name = {
+				let mut buf = [0; NAME_SIZE];
+
+				self.img.read_exact(&mut buf)?;
+
+				to_name(buf)
+			};
+
+			entries.push(Entry {
+				name,
+				off,
+				len,
+			})
+		}
+
+		Ok(Archive {
+			inner: self.img,
+			entries,
+		})
+	}
 }
 
-impl<R> Read for Entry<R>
+impl<'a, I> Archive<'a, I> {
+	/// Returns the number of entries in the archive.
+	pub fn len(&self) -> usize {
+		self.entries.len()
+	}
+
+	/// Returns if the archive is void of any entries.
+	pub fn is_empty(&self) -> bool {
+		self.entries.is_empty()
+	}
+
+	/// Returns the entry at the specified index, if it exists.
+	pub fn entry_at(&self, index: usize) -> Option<&Entry> {
+		self.entries.get(index)
+	}
+
+	/// Opens and returns the entry at the specified index for reading, if it exists.
+	pub fn read_at(&mut self, index: usize) -> Option<EntryRead<I>> {
+		let entry = self.entries.get(index)?;
+
+		Some(EntryRead {
+			inner: self.inner,
+			off: entry.off * SECTOR_SIZE,
+			len: entry.len * SECTOR_SIZE,
+		})
+	}
+}
+
+impl<'a, R> Read for EntryRead<'a, R>
 where
 	R: Read + Seek,
 {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-		let rc = self.inner.upgrade().unwrap();
-		let mut read = rc.borrow_mut();
-
-		// Limit the read to the length of the offset or the length of the buffer, whichever is smallest.
-
-		let max = self.len.min(buf.len() as u64) as usize;
-
-		read.seek(io::SeekFrom::Start(self.off))?;
-		read.read(&mut buf[..max])
-	}
-}
-
-impl<D, I> V1Read<D, I>
-where
-	D: Read,
-	I: Read + Seek,
-{
-	/// Creates a new V1-styled reader for the specified `dir` source and specified `img` source.
-	pub fn new(dir: D, img: I) -> Result<V1Read<D, I>, ReadError> {
-		Ok(Self {
-			dir: Rc::new(RefCell::new(dir)),
-			img: Rc::new(RefCell::new(img)),
-		})
-	}
-}
-
-impl<I> V2Read<I>
-where
-	I: Read + Seek,
-{
-	/// Creates a new V2-styled reader for the specified `img` source.
-	pub fn new(mut img: I) -> Result<V2Read<I>, ReadError> {
-		// Check if the header is a valid version 2 header.
-
-		let mut buffer = [0; VERSION_2_HEADER_SIZE];
-
-		img.read_exact(&mut buffer)?;
-
-		if buffer != VERSION_2_HEADER {
-			return Err(ReadError::InvalidHeader);
-		}
-
-		// Read the number of entries.
-
-		let count = img.read_u32::<LittleEndian>()? as usize;
-
-		Ok(Self {
-			idx: 0,
-			len: count,
-			img: Rc::new(RefCell::new(img)),
-		})
-	}
-}
-
-impl<D, I> Iterator for V1Read<D, I>
-where
-	D: Read,
-	I: Read + Seek,
-{
-	type Item = Result<Entry<I>, ReadError>;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		// Attempt to read the offset for the next entry. As we do not know how many entries are in the directory, gracefully handle an end-of-file error.
-		// Any other errors should be returned as normal.
-
-		let mut dir = self.dir.borrow_mut();
-
-		let off = match dir.read_u32::<LittleEndian>() {
-			Ok(off) => off as u64,
-			Err(err) if matches!(err.kind(), io::ErrorKind::UnexpectedEof) => return None,
-			Err(err) => return Some(Err(err.into())),
-		};
-
-		// Read the length.
-
-		let len = match dir.read_u32::<LittleEndian>() {
-			Ok(len) => len as u64,
-			Err(err) => return Some(Err(err.into())),
-		};
-
-		// Read the name as a null-terminated string.
-
-		let mut buf = [0; NAME_SIZE];
-
-		if let Err(err) = dir.read_exact(&mut buf) {
-			return Some(Err(err.into()));
-		};
-
-		let name = to_name(buf);
-
-		Some(Ok(Entry {
-			name,
-			off: off * SECTOR_SIZE,
-			len: len * SECTOR_SIZE,
-			inner: Rc::downgrade(&self.img),
-		}))
-	}
-}
-
-impl<I> Iterator for V2Read<I>
-where
-	I: Read + Seek,
-{
-	type Item = Result<Entry<I>, ReadError>;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		// Check if we are at the known end of the archive.
-		// Always return None if so.
-
-		if self.idx >= self.len {
-			return None;
-		}
-
-		self.idx += 1;
-
-		// Read the offset and the length.
-
-		let mut img = self.img.borrow_mut();
-
-		let off = match img.read_u32::<LittleEndian>() {
-			Ok(off) => off as u64,
-			Err(err) => return Some(Err(err.into())),
-		};
-
-		let len = match img.read_u16::<LittleEndian>() {
-			Ok(len) => len as u64,
-			Err(err) => return Some(Err(err.into())),
-		};
-
-		// Read the 'size in archive' which is unused.
-
-		let _ = match img.read_u16::<LittleEndian>() {
-			Ok(sin) => sin as u64,
-			Err(err) => return Some(Err(err.into())),
-		};
-
-		// Read the name as a null-terminated string.
-
-		let mut buf = [0; NAME_SIZE];
-
-		if let Err(err) = img.read_exact(&mut buf) {
-			return Some(Err(err.into()));
-		};
-
-		let name = to_name(buf);
-
-		Some(Ok(Entry {
-			name,
-			off: off * SECTOR_SIZE,
-			len: len * SECTOR_SIZE,
-			inner: Rc::downgrade(&self.img),
-		}))
+		self.inner.seek(io::SeekFrom::Start(self.off))?;
+		self.inner.take(self.len).read(buf)
 	}
 }
 
@@ -227,41 +212,43 @@ fn to_name(buf: [u8; NAME_SIZE]) -> String {
 mod tests {
 	use std::io::{Cursor, Read};
 
-	use super::{V1Read, V2Read};
+	use crate::read::{V1Reader, V2Reader};
+
+	use super::Archive;
 
 	#[test]
 	fn test_read_v1() {
-		let dir = Cursor::new(include_bytes!("../test/v1.dir"));
-		let img = Cursor::new(include_bytes!("../test/v1.img"));
+		let mut dir = Cursor::new(include_bytes!("../test/v1.dir"));
+		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
 
-		let mut read = V1Read::new(dir, img).expect("failed to create V1Read");
+		let archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
 
-		let virgo = read.next().expect("expected first entry").unwrap();
-		let landstal = read.next().expect("expected second entry").unwrap();
-		let longer = read.next().expect("expected third entry").unwrap();
+		assert_eq!(archive.len(), 3);
+
+		let virgo = archive.entry_at(0).expect("expected first entry");
+		let landstal = archive.entry_at(1).expect("expected second entry");
+		let test = archive.entry_at(2).expect("expected third entry");
 
 		assert_eq!(virgo.name, "VIRGO.DFF");
 		assert_eq!(virgo.off, 0);
-		assert_eq!(virgo.len, 2048);
+		assert_eq!(virgo.len, 1);
 
 		assert_eq!(landstal.name, "LANDSTAL.DFF");
-		assert_eq!(landstal.off, 2048);
-		assert_eq!(landstal.len, 4096);
+		assert_eq!(landstal.off, 1);
+		assert_eq!(landstal.len, 2);
 
-		assert_eq!(longer.name, "abcdefghijklmnopqrstuvwx");
-		assert_eq!(longer.off, 6144);
-		assert_eq!(longer.len, 16384);
-
-		assert!(read.next().is_none());
+		assert_eq!(test.name, "abcdefghijklmnopqrstuvwx");
+		assert_eq!(test.off, 3);
+		assert_eq!(test.len, 8);
 	}
 
 	#[test]
 	fn test_read_v1_entry() {
-		let dir = Cursor::new(include_bytes!("../test/v1.dir"));
-		let img = Cursor::new(include_bytes!("../test/v1.img"));
+		let mut dir = Cursor::new(include_bytes!("../test/v1.dir"));
+		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
 
-		let mut read = V1Read::new(dir, img).expect("failed to create V1Read");
-		let mut virgo = read.next().expect("expected first entry").unwrap();
+		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
+		let mut virgo = archive.read_at(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
 		let len = virgo.read(&mut buf).unwrap();
@@ -272,37 +259,35 @@ mod tests {
 
 	#[test]
 	fn test_read_v2() {
-		let img = Cursor::new(include_bytes!("../test/v2.img"));
+		let mut img = Cursor::new(include_bytes!("../test/v2.img"));
 
-		let mut read = V2Read::new(img).expect("failed to create V2Read");
+		let archive: Archive<_> = V2Reader::new(&mut img).try_into().expect("failed to read archive");
 
-		assert_eq!(read.len, 3);
+		assert_eq!(archive.len(), 3);
 
-		let virgo = read.next().expect("expected first entry").unwrap();
-		let landstal = read.next().expect("expected second entry").unwrap();
-		let longer = read.next().expect("expected third entry").unwrap();
+		let virgo = archive.entry_at(0).expect("expected first entry");
+		let landstal = archive.entry_at(1).expect("expected second entry");
+		let longer = archive.entry_at(2).expect("expected third entry");
 
 		assert_eq!(virgo.name, "VIRGO.DFF");
-		assert_eq!(virgo.off, 2048);
-		assert_eq!(virgo.len, 2048);
+		assert_eq!(virgo.off, 1);
+		assert_eq!(virgo.len, 1);
 
 		assert_eq!(landstal.name, "LANDSTAL.DFF");
-		assert_eq!(landstal.off, 4096);
-		assert_eq!(landstal.len, 2048);
+		assert_eq!(landstal.off, 2);
+		assert_eq!(landstal.len, 1);
 
 		assert_eq!(longer.name, "abcdefghijklmnopqrstuvwx");
-		assert_eq!(longer.off, 6144);
-		assert_eq!(longer.len, 16384);
-
-		assert!(read.next().is_none());
+		assert_eq!(longer.off, 3);
+		assert_eq!(longer.len, 8);
 	}
 
 	#[test]
 	fn test_read_v2_entry() {
-		let img = Cursor::new(include_bytes!("../test/v2.img"));
+		let mut img = Cursor::new(include_bytes!("../test/v2.img"));
 
-		let mut read = V2Read::new(img).expect("failed to create V2Read");
-		let mut virgo = read.next().expect("expected first entry").unwrap();
+		let mut archive: Archive<_> = V2Reader::new(&mut img).try_into().expect("failed to read archive");
+		let mut virgo = archive.read_at(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
 		let len = virgo.read(&mut buf).unwrap();
