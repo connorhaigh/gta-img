@@ -108,14 +108,7 @@ name = "gta-img"
 version = "0.1.0"
 dependencies = [
  "byteorder",
-]
-
-[[package]]
-name = "gta-img-cli"
-version = "0.1.0"
-dependencies = [
  "clap",
- "gta-img",
 ]
 
 [[package]]
