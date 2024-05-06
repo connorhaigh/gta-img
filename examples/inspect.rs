@@ -1,4 +1,4 @@
-//! Reads `gta3.img` and `gta3.dir` from the current directory, and outputs its contents.
+//! Reads `gta3.img` and `gta3.dir` from the current directory, and inspects the metadata for each entry.
 
 use std::fs::File;
 

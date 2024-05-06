@@ -14,11 +14,11 @@ pub const VERSION_2_HEADER: [u8; 4] = [0x56, 0x45, 0x52, 0x32]; // VER2
 /// Represents the length of the structure for a V2-style header; always `4`.
 pub const VERSION_2_HEADER_SIZE: usize = 4;
 
-/// Represents the number of bytes used for sector alignment.
-const SECTOR_SIZE: u64 = 2048;
+/// Represents the number of bytes of a sector.
+pub const SECTOR_SIZE: u64 = 2048;
 
 /// Represents the maximum length of the name of an entry.
-const NAME_SIZE: usize = 24;
+pub const NAME_SIZE: usize = 24;
 
 /// Represents an archive.
 #[derive(Debug)]
@@ -48,18 +48,17 @@ pub struct OpenEntry<'a, R> {
 
 	off: u64,
 	len: u64,
-
 	pos: u64,
 }
 
-/// Represents a reader of V1-styled archives.
+/// Represents a reader of V1-styled archives, from both an `img` file and a `dir` file.
 #[derive(Debug)]
 pub struct V1Reader<'a, 'b, D, I> {
 	dir: &'b mut D,
 	img: &'a mut I,
 }
 
-/// Represents a reader of V2-styled archives.
+/// Represents a reader of V2-styled archives, from a single `img` file.
 #[derive(Debug)]
 pub struct V2Reader<'a, I> {
 	img: &'a mut I,
@@ -235,7 +234,7 @@ where
 	R: Read + Seek,
 {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-		// Check if we are not at EOF (for the entry).
+		// Check if we are not at EoF (for the entry).
 
 		if self.pos >= self.len {
 			return Ok(0);

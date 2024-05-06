@@ -1,9 +1,15 @@
 [package]
 name = "gta-img"
 authors = ["Connor Haigh"]
-description = "gta-img is a library for manipulating 3D-universe Grand Theft Auto IMG/DIR files."
+description = "gta-img is a library for reading IMG/DIR files from the 3D universe-era of Grand Theft Auto IMG/DIR games."
 version = "0.1.0"
 edition = "2021"
+
+license = "MIT"
+repository = "https://github.com/connorhaigh/gta-img"
+readme = "readme.md"
+keywords = ["gta", "grand-theft-auto", "img"]
+categories = ["parser-implementations", "command-line-utilities"]
 
 [dependencies]
 byteorder = "1.5.0"

@@ -1,8 +1,16 @@
-# GTA-IMG
+# gta-img
 
-GTA-IMG is a Rust-based library for reading from `IMG` archives used throughout the 3D universe-era of Grand Theft Auto games.
+`gta-img` is a Rust-based library for reading from `IMG` archives (and supplementary `DIR` files) used throughout the 3D universe-era of Grand Theft Auto games.
+
+## Overview
+
+For all of the early 3D-based Grand Theft Auto games, the majority of their assets (such as models and textures) are stored in `img` files (with an accompanying `dir` file for older games), which is effectively a single archive which contains the metadata for each entry, as well as the entire contents of the entry itself. The structure of these files is relatively simple: effectively containing the name of an entry, as well as its offset and length. However, these entries are stored in sector-aligned sections of 2048 bytes, much like a typical [disk sector](https://en.wikipedia.org/wiki/Disk_sector). Upon start-up, the game will read the contents of these archives into memory as necessary.
+
+Further documentation on the format, as well as additional reading, may be ascertained from the very helpful [IMG archive](https://gtamods.com/wiki/IMG_archive) article on [gtamods.com](https://gtamods.com).
 
 ## Usage
+
+Iterating over the metadata for each of the entries in the archive:
 
 ```rust
 let mut img = File::open("gta3.img").expect("failed to open img");
@@ -16,6 +24,20 @@ gta_img::read(V1Reader::new(&mut dir, &mut img))
 	})
 ```
 
+Opening each of the entries in the archive for reading:
+
+```rust
+let mut img = File::open("gta3.img").expect("failed to open img");
+let mut archive = gta_img::read(V2Reader::new(&mut img)).expect("failed to read archive");
+
+for index in 0..archive.len() {
+	let mut source = archive.open(index).expect("failed to open entry");
+	let mut dest = io::empty();
+
+	io::copy(&mut source, &mut dest).expect("failed to copy entry");
+}
+```
+
 ## Support
 
 Presently, the library supports reading archives in both V1 and V2 format, which extends to supporting the following games:
@@ -27,4 +49,9 @@ Presently, the library supports reading archives in both V1 and V2 format, which
 
 ## Supplementary
 
-Included within the repository is also a Rust-based command-line application which can be used to perform a few basic operations on `IMG` and `DIR` files, namely the inspection and extraction of them.
+Included within the repository is also a example Rust-based command-line application which can be used to perform a few basic operations on `IMG` and `DIR` files, namely the inspection and extraction of them.
+
+```
+gta-img inspect v1 gta3.img gta3.dir
+gta-img extract --target out v1 gta3.img gta3.dir
+```
