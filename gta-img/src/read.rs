@@ -23,14 +23,6 @@ pub struct Archive<'a, R> {
 	entries: Vec<Entry>,
 }
 
-/// Represents an entry opened for reading.
-pub struct EntryRead<'a, R> {
-	inner: &'a mut R,
-
-	off: u64,
-	len: u64,
-}
-
 /// Represents an entry.
 pub struct Entry {
 	/// The name of the entry, up to 24 characters.
@@ -41,6 +33,16 @@ pub struct Entry {
 
 	/// The length, in sectors, of the entry.
 	pub len: u64,
+}
+
+/// Represents an entry opened for reading.
+pub struct OpenEntry<'a, R> {
+	inner: &'a mut R,
+
+	off: u64,
+	len: u64,
+
+	pos: u64,
 }
 
 /// Represents a reader of V1-styled archives.
@@ -84,13 +86,21 @@ where
 		let mut entries: Vec<Entry> = Vec::new();
 
 		loop {
+			// Attempt to read the offset for the next entry, however graciously handle an EOF.
+			// Return any other kind of errors as normal.
+
 			let off = match self.dir.read_u32::<LittleEndian>() {
 				Ok(off) => off as u64,
 				Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
 				Err(err) => return Err(err.into()),
 			};
 
+			// Read the properties of the entry.
+
 			let len = self.dir.read_u32::<LittleEndian>()? as u64;
+
+			// Read the name as a null-terminated string.
+
 			let name = {
 				let mut buf = [0; NAME_SIZE];
 
@@ -120,6 +130,8 @@ where
 	type Error = ReadError;
 
 	fn try_into(self) -> Result<Archive<'a, I>, Self::Error> {
+		// Read the header of the archive.
+
 		let header = {
 			let mut buffer = [0; VERSION_2_HEADER_SIZE];
 
@@ -128,18 +140,25 @@ where
 			buffer
 		};
 
+		// Check if the header is of the expected format.
+
 		if header != VERSION_2_HEADER {
 			return Err(ReadError::InvalidHeader);
 		}
+
+		// Read the (expected) number of entries in the archive.
 
 		let count = self.img.read_u32::<LittleEndian>()? as usize;
 		let mut entries: Vec<Entry> = Vec::with_capacity(count);
 
 		for _ in 0..count {
+			// Read the properties of the entry.
+
 			let off = self.img.read_u32::<LittleEndian>()? as u64;
 			let len = self.img.read_u16::<LittleEndian>()? as u64;
+			let _ = self.img.read_u16::<LittleEndian>()?; // Unused (always 0)
 
-			let _ = self.img.read_u16::<LittleEndian>()?;
+			// Read the name as a null-terminated string.
 
 			let name = {
 				let mut buf = [0; NAME_SIZE];
@@ -183,26 +202,49 @@ impl<'a, I> Archive<'a, I> {
 	pub fn iter(&self) -> impl Iterator<Item = &Entry> {
 		self.entries.iter()
 	}
+}
 
+impl<'a, I> Archive<'a, I>
+where
+	I: Read + Seek,
+{
 	/// Opens and returns the entry at the specified index for reading, if it exists.
-	pub fn open(&mut self, index: usize) -> Option<EntryRead<I>> {
+	pub fn open(&mut self, index: usize) -> Option<OpenEntry<I>> {
 		let entry = self.entries.get(index)?;
 
-		Some(EntryRead {
+		Some(OpenEntry {
 			inner: self.inner,
 			off: entry.off * SECTOR_SIZE,
 			len: entry.len * SECTOR_SIZE,
+			pos: 0,
 		})
 	}
 }
 
-impl<'a, R> Read for EntryRead<'a, R>
+impl<'a, R> Read for OpenEntry<'a, R>
 where
 	R: Read + Seek,
 {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-		self.inner.seek(io::SeekFrom::Start(self.off))?;
-		self.inner.take(self.len).read(buf)
+		// Check if we are not at EOF (for the entry).
+
+		if self.pos >= self.len {
+			return Ok(0);
+		}
+
+		// Seek to the start of the entry including any currently read bytes.
+
+		self.inner.seek(io::SeekFrom::Start(self.off + self.pos))?;
+
+		// Calculate the maximum possible number of bytes to read for the entry, to forbid reading beyond it.
+		// Includes the number of bytes already read, honouring the length of the entry and the length of the buffer.
+
+		let max = (self.len - self.pos.min(self.len)).min(buf.len() as u64) as usize;
+		let read = self.inner.read(&mut buf[0..max])?;
+
+		self.pos += read as u64;
+
+		Ok(read)
 	}
 }
 
@@ -256,7 +298,7 @@ mod tests {
 		let mut virgo = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
-		let len = virgo.read(&mut buf).unwrap();
+		let len = virgo.read(&mut buf).expect("failed to read entry");
 
 		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // 'Virgo-v1'
 		assert_eq!(len, 8);
@@ -295,9 +337,32 @@ mod tests {
 		let mut virgo = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
-		let len = virgo.read(&mut buf).unwrap();
+		let len = virgo.read(&mut buf).expect("failed to read entry");
 
 		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'2']); // 'Virgo-v2'
 		assert_eq!(len, 8);
+	}
+
+	#[test]
+	fn test_read_entry_partial() {
+		let mut dir = Cursor::new(include_bytes!("../test/v1.dir"));
+		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
+
+		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
+		let mut entry = archive.open(0).expect("expected first entry");
+
+		let mut buf = [0; 1024];
+		let num = entry.read(&mut buf).expect("failed to read entry first time");
+
+		assert_eq!(buf[0..8], [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // 'Virgo-v1'
+		assert_eq!(num, 1024);
+
+		let num = entry.read(&mut buf).expect("failed to read entry second time");
+
+		assert_eq!(num, 1024);
+
+		let num = entry.read(&mut buf);
+
+		assert!(num.is_err());
 	}
 }

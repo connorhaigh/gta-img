@@ -12,7 +12,7 @@ gta_img::read(V1Reader::new(&mut dir, &mut img))
 	.expect("failed to read archive")
 	.iter()
 	.for_each(|entry| {
-		println!("{}, offset: {} length: {}", entry.name, entry.off, entry.len);
+		println!("{} - offset: {}, length: {}", entry.name, entry.off, entry.len);
 	})
 ```
 
