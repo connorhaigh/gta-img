@@ -363,6 +363,6 @@ mod tests {
 
 		let num = entry.read(&mut buf);
 
-		assert!(num.is_err());
+		assert!(matches!(num, Ok(0)));
 	}
 }
