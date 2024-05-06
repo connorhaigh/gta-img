@@ -44,8 +44,8 @@ pub struct Entry {
 }
 
 /// Represents a reader of V1-styled archives.
-pub struct V1Reader<'a, D, I> {
-	dir: &'a mut D,
+pub struct V1Reader<'a, 'b, D, I> {
+	dir: &'b mut D,
 	img: &'a mut I,
 }
 
@@ -54,9 +54,9 @@ pub struct V2Reader<'a, I> {
 	img: &'a mut I,
 }
 
-impl<'a, D, I> V1Reader<'a, D, I> {
+impl<'a, 'b, D, I> V1Reader<'a, 'b, D, I> {
 	/// Creates a new V1-styled reader with the specified `dir` source and specified `img` source.
-	pub fn new(dir: &'a mut D, img: &'a mut I) -> Self {
+	pub fn new(dir: &'b mut D, img: &'a mut I) -> Self {
 		Self {
 			dir,
 			img,
@@ -73,7 +73,7 @@ impl<'a, I> V2Reader<'a, I> {
 	}
 }
 
-impl<'a, D, I> TryInto<Archive<'a, I>> for V1Reader<'a, D, I>
+impl<'a, 'b, D, I> TryInto<Archive<'a, I>> for V1Reader<'a, 'b, D, I>
 where
 	D: Read,
 	I: Read + Seek,
@@ -175,12 +175,17 @@ impl<'a, I> Archive<'a, I> {
 	}
 
 	/// Returns the entry at the specified index, if it exists.
-	pub fn entry_at(&self, index: usize) -> Option<&Entry> {
+	pub fn get(&self, index: usize) -> Option<&Entry> {
 		self.entries.get(index)
 	}
 
+	/// Returns an iterator over each of the entries in the archive.
+	pub fn iter(&self) -> impl Iterator<Item = &Entry> {
+		self.entries.iter()
+	}
+
 	/// Opens and returns the entry at the specified index for reading, if it exists.
-	pub fn read_at(&mut self, index: usize) -> Option<EntryRead<I>> {
+	pub fn open(&mut self, index: usize) -> Option<EntryRead<I>> {
 		let entry = self.entries.get(index)?;
 
 		Some(EntryRead {
@@ -225,9 +230,9 @@ mod tests {
 
 		assert_eq!(archive.len(), 3);
 
-		let virgo = archive.entry_at(0).expect("expected first entry");
-		let landstal = archive.entry_at(1).expect("expected second entry");
-		let test = archive.entry_at(2).expect("expected third entry");
+		let virgo = archive.get(0).expect("expected first entry");
+		let landstal = archive.get(1).expect("expected second entry");
+		let test = archive.get(2).expect("expected third entry");
 
 		assert_eq!(virgo.name, "VIRGO.DFF");
 		assert_eq!(virgo.off, 0);
@@ -248,7 +253,7 @@ mod tests {
 		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
 
 		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
-		let mut virgo = archive.read_at(0).expect("expected first entry");
+		let mut virgo = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
 		let len = virgo.read(&mut buf).unwrap();
@@ -265,9 +270,9 @@ mod tests {
 
 		assert_eq!(archive.len(), 3);
 
-		let virgo = archive.entry_at(0).expect("expected first entry");
-		let landstal = archive.entry_at(1).expect("expected second entry");
-		let longer = archive.entry_at(2).expect("expected third entry");
+		let virgo = archive.get(0).expect("expected first entry");
+		let landstal = archive.get(1).expect("expected second entry");
+		let longer = archive.get(2).expect("expected third entry");
 
 		assert_eq!(virgo.name, "VIRGO.DFF");
 		assert_eq!(virgo.off, 1);
@@ -287,7 +292,7 @@ mod tests {
 		let mut img = Cursor::new(include_bytes!("../test/v2.img"));
 
 		let mut archive: Archive<_> = V2Reader::new(&mut img).try_into().expect("failed to read archive");
-		let mut virgo = archive.read_at(0).expect("expected first entry");
+		let mut virgo = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
 		let len = virgo.read(&mut buf).unwrap();
