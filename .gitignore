@@ -1,0 +1,9 @@
+# Cargo-generated artifacts
+debug/
+target/
+
+# Rustfmt-generated backup files
+**/*.rs.bk
+
+# MSVC-generated debugging symbols
+*.pdb
