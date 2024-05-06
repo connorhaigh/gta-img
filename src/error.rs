@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{error::Error, fmt::Display, io};
+use std::{error::Error, io};
 
 /// Represents a read-related error.
 #[derive(Debug)]
@@ -13,8 +13,8 @@ pub enum ReadError {
 
 impl Error for ReadError {}
 
-impl Display for ReadError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl fmt::Display for ReadError {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match self {
 			Self::IoError(err) => write!(f, "input/output error [{}]", err),
 			Self::InvalidHeader => write!(f, "invalid header"),

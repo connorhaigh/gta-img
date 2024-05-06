@@ -78,8 +78,8 @@ fn main() {
 			img,
 			dir,
 		} => {
-			img_file = File::open(&img).expect("failed to open img");
-			dir_file = File::open(&dir).expect("failed to open dir");
+			img_file = File::open(img).expect("failed to open img file");
+			dir_file = File::open(dir).expect("failed to open dir file");
 
 			println!("Reading V1-styled archive...");
 
@@ -88,7 +88,7 @@ fn main() {
 		Version::V2 {
 			img,
 		} => {
-			img_file = File::open(&img).expect("failed to open img");
+			img_file = File::open(img).expect("failed to open img file");
 
 			println!("Reading V2-styled archive...");
 
@@ -122,10 +122,10 @@ fn main() {
 
 				println!("Extracting entry [{}] to file <{}>...", entry.name, &path.display());
 
-				let mut open = archive.open(index).expect("failed to open entry for reading");
-				let mut file = File::create(&path).expect("failed to open file");
+				let mut open = archive.open(index).expect("failed to open entry");
+				let mut file = File::create(&path).expect("failed to create entry file");
 
-				io::copy(&mut open, &mut file).expect("failed to extract file");
+				io::copy(&mut open, &mut file).expect("failed to extract entry to file");
 			}
 
 			println!("Extracted {} entries.", archive.len());

@@ -1,4 +1,8 @@
-use std::io::{self, Read, Seek};
+use std::{
+	cmp,
+	hash::{self, Hash},
+	io::{self, Read, Seek},
+};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -17,6 +21,7 @@ const SECTOR_SIZE: u64 = 2048;
 const NAME_SIZE: usize = 24;
 
 /// Represents an archive.
+#[derive(Debug)]
 pub struct Archive<'a, R> {
 	inner: &'a mut R,
 
@@ -24,6 +29,7 @@ pub struct Archive<'a, R> {
 }
 
 /// Represents an entry.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, PartialOrd)]
 pub struct Entry {
 	/// The name of the entry, up to 24 characters.
 	pub name: String,
@@ -36,6 +42,7 @@ pub struct Entry {
 }
 
 /// Represents an entry opened for reading.
+#[derive(Debug)]
 pub struct OpenEntry<'a, R> {
 	inner: &'a mut R,
 
@@ -46,12 +53,14 @@ pub struct OpenEntry<'a, R> {
 }
 
 /// Represents a reader of V1-styled archives.
+#[derive(Debug)]
 pub struct V1Reader<'a, 'b, D, I> {
 	dir: &'b mut D,
 	img: &'a mut I,
 }
 
 /// Represents a reader of V2-styled archives.
+#[derive(Debug)]
 pub struct V2Reader<'a, I> {
 	img: &'a mut I,
 }
@@ -248,11 +257,29 @@ where
 	}
 }
 
-fn to_name(buf: [u8; NAME_SIZE]) -> String {
-	let position = buf.iter().position(|&b| b == b'\0').unwrap_or(buf.len());
-	let value = buf.into_iter().map(char::from).take(position).collect();
+impl<'a, I> Hash for Archive<'a, I> {
+	fn hash<H: hash::Hasher>(&self, state: &mut H) {
+		self.entries.hash(state);
+	}
+}
 
-	value
+impl<'a, I> PartialEq for Archive<'a, I> {
+	fn eq(&self, other: &Self) -> bool {
+		self.entries == other.entries
+	}
+}
+
+impl<'a, I> PartialOrd for Archive<'a, I> {
+	fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+		self.entries.partial_cmp(&other.entries)
+	}
+}
+
+fn to_name(buf: [u8; NAME_SIZE]) -> String {
+	buf.into_iter()
+		.map(char::from)
+		.take(buf.iter().position(|&b| b == b'\0').unwrap_or(buf.len()))
+		.collect()
 }
 
 #[cfg(test)]
