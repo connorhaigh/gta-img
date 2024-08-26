@@ -10,18 +10,33 @@ Further documentation on the format, as well as additional reading, may be ascer
 
 ## Usage
 
-Iterating over the metadata for each of the entries in the archive:
+As there is a distinction between the versions of an archive in terms of the behaviour and the format, there are unique types to identify when reading from and/or writing to a V1-style or V2-style archive.
+
+Reading all of the entries in an existing archive:
 
 ```rust
 let mut img = File::open("gta3.img").expect("failed to open img");
 let mut dir = File::open("gta3.dir").expect("failed to open dir");
 
-gta_img::read(V1Reader::new(&mut dir, &mut img))
+V1Reader::new(&mut dir, &mut img)
 	.expect("failed to read archive")
 	.iter()
 	.for_each(|entry| {
 		println!("{} - offset: {}, length: {}", entry.name, entry.off, entry.len);
 	})
+```
+
+Writing a single entry to a new archive:
+
+```rust
+let mut src = File::open("virgo.dff").expect("failed to open src");
+
+let mut dir = File::create("gta3.dir").expect("failed to create dir");
+let mut img = File::create("gta3.img").expect("failed to create img");
+
+V1Writer::new(&mut dir, &mut img)
+	.write("virgo.dff", &mut src)
+	.expect("failed to write archive");
 ```
 
 Opening each of the entries in the archive for reading:

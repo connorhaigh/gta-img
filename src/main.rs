@@ -3,7 +3,7 @@
 use std::{fs::File, io, path::PathBuf};
 
 use clap::{command, Parser, Subcommand};
-use gta_img::read::{V1Reader, V2Reader};
+use gta_img::read::{Reader, V1Reader, V2Reader};
 
 /// Performs basic read-only operations on IMG/DIR archives
 #[derive(Debug, Parser)]
@@ -83,7 +83,7 @@ fn main() {
 
 			println!("Reading V1-styled archive...");
 
-			gta_img::read(V1Reader::new(&mut dir_file, &mut img_file)).expect("failed to read V1-styled archive")
+			V1Reader::new(&mut dir_file, &mut img_file).read().expect("failed to read V1-styled archive")
 		}
 		Version::V2 {
 			img,
@@ -92,7 +92,7 @@ fn main() {
 
 			println!("Reading V2-styled archive...");
 
-			gta_img::read(V2Reader::new(&mut img_file)).expect("failed to read V2-styled archive")
+			V2Reader::new(&mut img_file).read().expect("failed to read V2-styled archive")
 		}
 	};
 

@@ -6,19 +6,13 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::error::ReadError;
+use crate::{error::ReadError, NAME_SIZE, SECTOR_SIZE};
 
 /// Represents the structure for a V2-style header.
 pub const VERSION_2_HEADER: [u8; 4] = [0x56, 0x45, 0x52, 0x32]; // VER2
 
 /// Represents the length of the structure for a V2-style header; always `4`.
 pub const VERSION_2_HEADER_SIZE: usize = 4;
-
-/// Represents the number of bytes of a sector.
-pub const SECTOR_SIZE: u64 = 2048;
-
-/// Represents the maximum length of the name of an entry.
-pub const NAME_SIZE: usize = 24;
 
 /// Represents an archive.
 #[derive(Debug)]
@@ -31,7 +25,7 @@ pub struct Archive<'a, R> {
 /// Represents an entry.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, PartialOrd)]
 pub struct Entry {
-	/// The name of the entry, up to 24 characters.
+	/// The name of the entry, up to 23 characters.
 	pub name: String,
 
 	/// The offset, in sectors, of the entry.
@@ -64,6 +58,12 @@ pub struct V2Reader<'a, I> {
 	img: &'a mut I,
 }
 
+/// Represents a generic archive reader that can produce archives.
+pub trait Reader<'a, R> {
+	/// Attempts to fully read an entire archive.
+	fn read(self) -> Result<Archive<'a, R>, ReadError>;
+}
+
 impl<'a, 'b, D, I> V1Reader<'a, 'b, D, I> {
 	/// Creates a new V1-styled reader with the specified `dir` source and specified `img` source.
 	pub fn new(dir: &'b mut D, img: &'a mut I) -> Self {
@@ -83,14 +83,12 @@ impl<'a, I> V2Reader<'a, I> {
 	}
 }
 
-impl<'a, 'b, D, I> TryInto<Archive<'a, I>> for V1Reader<'a, 'b, D, I>
+impl<'a, 'b, D, I> Reader<'a, I> for V1Reader<'a, 'b, D, I>
 where
 	D: Read,
 	I: Read + Seek,
 {
-	type Error = ReadError;
-
-	fn try_into(self) -> Result<Archive<'a, I>, Self::Error> {
+	fn read(self) -> Result<Archive<'a, I>, ReadError> {
 		let mut entries: Vec<Entry> = Vec::new();
 
 		loop {
@@ -99,8 +97,10 @@ where
 
 			let off = match self.dir.read_u32::<LittleEndian>() {
 				Ok(off) => off as u64,
-				Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
-				Err(err) => return Err(err.into()),
+				Err(err) => match err.kind() {
+					io::ErrorKind::UnexpectedEof => break,
+					_ => return Err(err.into()),
+				},
 			};
 
 			// Read the properties of the entry.
@@ -114,7 +114,7 @@ where
 
 				self.dir.read_exact(&mut buf)?;
 
-				to_name(buf)
+				to_name(&buf)
 			};
 
 			entries.push(Entry {
@@ -131,13 +131,11 @@ where
 	}
 }
 
-impl<'a, I> TryInto<Archive<'a, I>> for V2Reader<'a, I>
+impl<'a, I> Reader<'a, I> for V2Reader<'a, I>
 where
 	I: Read + Seek,
 {
-	type Error = ReadError;
-
-	fn try_into(self) -> Result<Archive<'a, I>, Self::Error> {
+	fn read(self) -> Result<Archive<'a, I>, ReadError> {
 		// Read the header of the archive.
 
 		let header = {
@@ -173,7 +171,7 @@ where
 
 				self.img.read_exact(&mut buf)?;
 
-				to_name(buf)
+				to_name(&buf)
 			};
 
 			entries.push(Entry {
@@ -274,10 +272,10 @@ impl<'a, I> PartialOrd for Archive<'a, I> {
 	}
 }
 
-fn to_name(buf: [u8; NAME_SIZE]) -> String {
-	buf.into_iter()
-		.map(char::from)
-		.take(buf.iter().position(|&b| b == b'\0').unwrap_or(buf.len()))
+fn to_name(buf: &[u8]) -> String {
+	buf.iter()
+		.map(|&b| char::from(b))
+		.take(buf.iter().position(|&b| b == b'\0').unwrap_or(buf.len()).min(NAME_SIZE))
 		.collect()
 }
 
@@ -285,16 +283,24 @@ fn to_name(buf: [u8; NAME_SIZE]) -> String {
 mod tests {
 	use std::io::{Cursor, Read};
 
-	use crate::read::{V1Reader, V2Reader};
+	use crate::read::{Reader, V1Reader, V2Reader};
 
-	use super::Archive;
+	use super::{to_name, Archive};
+
+	#[test]
+	fn test_to_name() {
+		let slice = vec![83, 111, 109, 101, 98, 111, 100, 121, 79, 110, 99, 101, 84, 111, 108, 100, 77, 101, 87, 111, 114, 108, 100, 71, 111, 110, 110, 97, 82, 111, 108, 108, 77, 101]; // SomebodyOnceToldMeWorldGonnaRollMe
+		let string = to_name(&slice);
+
+		assert_eq!(string, "SomebodyOnceToldMeWorld");
+	}
 
 	#[test]
 	fn test_read_v1() {
 		let mut dir = Cursor::new(include_bytes!("../test/v1.dir"));
 		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
 
-		let archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
+		let archive: Archive<_> = V1Reader::new(&mut dir, &mut img).read().expect("failed to read archive");
 
 		assert_eq!(archive.len(), 3);
 
@@ -320,7 +326,7 @@ mod tests {
 		let mut dir = Cursor::new(include_bytes!("../test/v1.dir"));
 		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
 
-		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
+		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).read().expect("failed to read archive");
 		let mut virgo = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
@@ -334,7 +340,7 @@ mod tests {
 	fn test_read_v2() {
 		let mut img = Cursor::new(include_bytes!("../test/v2.img"));
 
-		let archive: Archive<_> = V2Reader::new(&mut img).try_into().expect("failed to read archive");
+		let archive: Archive<_> = V2Reader::new(&mut img).read().expect("failed to read archive");
 
 		assert_eq!(archive.len(), 3);
 
@@ -359,7 +365,7 @@ mod tests {
 	fn test_read_v2_entry() {
 		let mut img = Cursor::new(include_bytes!("../test/v2.img"));
 
-		let mut archive: Archive<_> = V2Reader::new(&mut img).try_into().expect("failed to read archive");
+		let mut archive: Archive<_> = V2Reader::new(&mut img).read().expect("failed to read archive");
 		let mut virgo = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 8];
@@ -374,7 +380,7 @@ mod tests {
 		let mut dir = Cursor::new(include_bytes!("../test/v1.dir"));
 		let mut img = Cursor::new(include_bytes!("../test/v1.img"));
 
-		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).try_into().expect("failed to read archive");
+		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).read().expect("failed to read archive");
 		let mut entry = archive.open(0).expect("expected first entry");
 
 		let mut buf = [0; 1024];
