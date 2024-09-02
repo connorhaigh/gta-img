@@ -14,3 +14,6 @@ pub const SECTOR_SIZE: u64 = 2048;
 
 /// Represents the maximum length of the name of an entry, excluding the null-terminator.
 pub const NAME_SIZE: usize = 23;
+
+/// Represents the null terminator for the names of entries.
+pub const NULL_TERMINATOR: u8 = b'\0';

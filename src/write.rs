@@ -2,7 +2,7 @@ use std::io::{self, Read, Seek, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
 
-use crate::{error::WriteError, NAME_SIZE, SECTOR_SIZE};
+use crate::{error::WriteError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE};
 
 /// Represents a write of V1-styled archives, to both an `img` file and a `dir` file.
 #[derive(Debug)]
@@ -76,7 +76,7 @@ where
 
 		// Write the name as a null-terminated string.
 
-		let name = to_name(name);
+		let name = to_null_terminated(name);
 
 		self.dir.write_all(&name)?;
 
@@ -96,13 +96,12 @@ where
 	}
 }
 
-fn to_name(str: &str) -> Vec<u8> {
+fn to_null_terminated(str: &str) -> Vec<u8> {
 	str.chars()
-		.map(u8::try_from)
-		.flatten()
-		.chain(std::iter::repeat(b'\0'))
+		.flat_map(u8::try_from)
+		.chain(std::iter::repeat(NULL_TERMINATOR))
 		.take(NAME_SIZE)
-		.chain(std::iter::once(b'\0'))
+		.chain(std::iter::once(NULL_TERMINATOR))
 		.collect()
 }
 
@@ -110,14 +109,24 @@ fn to_name(str: &str) -> Vec<u8> {
 mod tests {
 	use std::io::Cursor;
 
-	use super::{to_name, V1Writer, Writer};
+	use super::{to_null_terminated, V1Writer, Writer};
+
+	#[test]
+	pub fn test_to_name_truncate() {
+		let string = "SomebodyOnceToldMeWorldGonnaRollMe";
+		let slice = to_null_terminated(&string);
+
+		assert_eq!(slice, vec![b'S', b'o', b'm', b'e', b'b', b'o', b'd', b'y', b'O', b'n', b'c', b'e', b'T', b'o', b'l', b'd', b'M', b'e', b'W', b'o', b'r', b'l', b'd', 0]); // SomebodyOnceToldMeWorld
+		assert_eq!(slice.len(), 24);
+	}
 
 	#[test]
 	pub fn test_to_name() {
-		let string = "SomebodyOnceToldMeWorldGonnaRollMe";
-		let slice = to_name(&string);
+		let string = "VIRGO.DFF";
+		let slice = to_null_terminated(&string);
 
-		assert_eq!(slice, vec![83, 111, 109, 101, 98, 111, 100, 121, 79, 110, 99, 101, 84, 111, 108, 100, 77, 101, 87, 111, 114, 108, 100, 0]);
+		assert_eq!(slice, vec![b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // VIRGO.DFF
+		assert_eq!(slice.len(), 24);
 	}
 
 	#[test]
@@ -137,10 +146,10 @@ mod tests {
 		let dir_bytes = vec![
 			0, 0, 0, 0, // Offset
 			1, 0, 0, 0, // Length
-			86, 73, 82, 71, 79, 46, 68, 70, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // Name
+			b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // VIRGO.DFF
 			0, 8, 0, 0, // Offset
 			1, 0, 0, 0, // Length,
-			76, 65, 78, 68, 83, 84, 65, 76, 46, 68, 70, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 // Name
+			b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 // LANDSTAL.DFF
 		];
 
 		assert_eq!(dir.get_ref(), &dir_bytes);

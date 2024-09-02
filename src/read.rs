@@ -6,13 +6,16 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::{error::ReadError, NAME_SIZE, SECTOR_SIZE};
+use crate::{error::ReadError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE};
 
 /// Represents the structure for a V2-style header.
 pub const VERSION_2_HEADER: [u8; 4] = [0x56, 0x45, 0x52, 0x32]; // VER2
 
 /// Represents the length of the structure for a V2-style header; always `4`.
 pub const VERSION_2_HEADER_SIZE: usize = 4;
+
+/// Represents the length of the name of an entry with the null terminator.
+const NAME_SIZE_NULL_TERMINATOR: usize = NAME_SIZE + 1;
 
 /// Represents an archive.
 #[derive(Debug)]
@@ -110,11 +113,11 @@ where
 			// Read the name as a null-terminated string.
 
 			let name = {
-				let mut buf = [0; NAME_SIZE];
+				let mut buf = [0; NAME_SIZE_NULL_TERMINATOR];
 
 				self.dir.read_exact(&mut buf)?;
 
-				to_name(&buf)
+				from_null_terminated(&buf)
 			};
 
 			entries.push(Entry {
@@ -167,11 +170,11 @@ where
 			// Read the name as a null-terminated string.
 
 			let name = {
-				let mut buf = [0; NAME_SIZE];
+				let mut buf = [0; NAME_SIZE_NULL_TERMINATOR];
 
 				self.img.read_exact(&mut buf)?;
 
-				to_name(&buf)
+				from_null_terminated(&buf)
 			};
 
 			entries.push(Entry {
@@ -272,11 +275,11 @@ impl<'a, I> PartialOrd for Archive<'a, I> {
 	}
 }
 
-fn to_name(buf: &[u8]) -> String {
-	buf.iter()
-		.map(|&b| char::from(b))
-		.take(buf.iter().position(|&b| b == b'\0').unwrap_or(buf.len()).min(NAME_SIZE))
-		.collect()
+fn from_null_terminated(buf: &[u8]) -> String {
+	let pos = buf.iter().position(|&b| b == NULL_TERMINATOR).unwrap_or(buf.len()).min(NAME_SIZE_NULL_TERMINATOR);
+	let str = buf.iter().map(|&b| char::from(b)).take(pos).collect();
+
+	str
 }
 
 #[cfg(test)]
@@ -285,14 +288,22 @@ mod tests {
 
 	use crate::read::{Reader, V1Reader, V2Reader};
 
-	use super::{to_name, Archive};
+	use super::{from_null_terminated, Archive};
+
+	#[test]
+	fn test_to_name_truncate() {
+		let slice = vec![b'S', b'o', b'm', b'e', b'b', b'o', b'd', b'y', b'O', b'n', b'c', b'e', b'T', b'o', b'l', b'd', b'M', b'e', b'W', b'o', b'r', b'l', b'd', b'G', b'o', b'n', b'n', b'a', b'R', b'o', b'l', b'l', b'M', b'e', 0]; // SomebodyOnceToldMeWorldGonnaRollMe
+		let string = from_null_terminated(&slice);
+
+		assert_eq!(string, "SomebodyOnceToldMeWorldG");
+	}
 
 	#[test]
 	fn test_to_name() {
-		let slice = vec![83, 111, 109, 101, 98, 111, 100, 121, 79, 110, 99, 101, 84, 111, 108, 100, 77, 101, 87, 111, 114, 108, 100, 71, 111, 110, 110, 97, 82, 111, 108, 108, 77, 101]; // SomebodyOnceToldMeWorldGonnaRollMe
-		let string = to_name(&slice);
+		let slice = vec![b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0]; // VIRGO.DFF
+		let string = from_null_terminated(&slice);
 
-		assert_eq!(string, "SomebodyOnceToldMeWorld");
+		assert_eq!(string, "VIRGO.DFF");
 	}
 
 	#[test]
@@ -332,7 +343,7 @@ mod tests {
 		let mut buf = [0; 8];
 		let len = virgo.read(&mut buf).expect("failed to read entry");
 
-		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // 'Virgo-v1'
+		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // Virgo-v1
 		assert_eq!(len, 8);
 	}
 
@@ -371,7 +382,7 @@ mod tests {
 		let mut buf = [0; 8];
 		let len = virgo.read(&mut buf).expect("failed to read entry");
 
-		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'2']); // 'Virgo-v2'
+		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'2']); // Virgo-v2
 		assert_eq!(len, 8);
 	}
 
@@ -386,7 +397,7 @@ mod tests {
 		let mut buf = [0; 1024];
 		let num = entry.read(&mut buf).expect("failed to read entry first time");
 
-		assert_eq!(buf[0..8], [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // 'Virgo-v1'
+		assert_eq!(buf[0..8], [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // Virgo-v1
 		assert_eq!(num, 1024);
 
 		let num = entry.read(&mut buf).expect("failed to read entry second time");
