@@ -1,15 +1,12 @@
-name: Rust
+name: Build
 
 on:
   push:
   pull_request:
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - run: cargo build --verbose
