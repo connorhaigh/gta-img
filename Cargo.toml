@@ -2,7 +2,7 @@
 name = "gta-img"
 authors = ["Connor Haigh"]
 description = "gta-img is a library for reading IMG/DIR files from the 3D universe-era of Grand Theft Auto IMG/DIR games."
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 license = "MIT"
