@@ -5,7 +5,7 @@ use std::{fs::File, io, path::PathBuf};
 use clap::{command, Parser, Subcommand};
 use gta_img::read::{Reader, V1Reader, V2Reader};
 
-/// Performs basic read-only operations on IMG/DIR archives
+/// Performs basic operations on IMG/DIR archives
 #[derive(Debug, Parser)]
 struct Cli {
 	/// Indicates the operation to perform

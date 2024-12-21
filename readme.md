@@ -1,6 +1,6 @@
 # gta-img
 
-`gta-img` is a Rust-based library for reading from `IMG` archives (and supplementary `DIR` files) used throughout the 3D universe-era of Grand Theft Auto games.
+`gta-img` is a Rust-based library for reading from/writing to `IMG` archives (and supplementary `DIR` files) used throughout the 3D universe-era of Grand Theft Auto games.
 
 ## Overview
 

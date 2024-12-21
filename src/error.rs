@@ -21,7 +21,7 @@ pub enum WriteError {
 	InsufficientHeaderSize,
 
 	/// Indicates that the provided name of an entry is longer than 23 characters.
-	NameTooLong
+	InvalidNameLength
 }
 
 impl Error for ReadError {}
@@ -41,7 +41,7 @@ impl fmt::Display for WriteError {
 		match self {
 			Self::IoError(err) => write!(f, "input/output error [{}]", err),
 			Self::InsufficientHeaderSize => write!(f, "insufficient header size"),
-			Self::NameTooLong => write!(f, "name too long")
+			Self::InvalidNameLength => write!(f, "invalid name length")
 		}
 	}
 }

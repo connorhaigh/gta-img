@@ -1,22 +1,40 @@
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
 
-use crate::{error::WriteError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE};
+use crate::{error::WriteError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE, VERSION_2_HEADER};
 
-/// Represents a write of V1-styled archives, to both an `img` file and a `dir` file.
+/// Represents the offset for where the entries are located in the header of a V2-styled archive.
+const VERSION_2_HEADER_ENTRY_OFFSET: usize = 8;
+
+/// Represents the size of an individual entry in the header of a V2-styled archive.
+const VERSION_2_HEADER_ENTRY_SIZE: usize = 8;
+
+/// Represents a writer of V1-styled archives, to both an `img` file and a `dir` file.
 #[derive(Debug)]
-pub struct V1Writer<'a, 'b, D, I> {
+pub struct V1Writer<'a, 'b, D, I>
+where
+	D: Write,
+	I: Write + Seek,
+{
 	dir: &'b mut D,
 	img: &'a mut I,
 
-	pos: u64,
+	sector: u64,
 }
 
-/// Represents a reader of V2-styled archives, to a single `img` file.
+/// Represents a writer of V2-styled archives, to a single `img` file.
 #[derive(Debug)]
-pub struct V2Writer<'a, I> {
+pub struct V2Writer<'a, I>
+where
+	I: Write + Seek,
+{
 	img: &'a mut I,
+
+	sector: u64,
+
+	entries: usize,
+	entries_written: usize,
 }
 
 /// Represents a generic archive writer that can persist archives.
@@ -27,23 +45,45 @@ pub trait Writer {
 		T: Read;
 }
 
-impl<'a, 'b, D, I> V1Writer<'a, 'b, D, I> {
+impl<'a, 'b, D, I> V1Writer<'a, 'b, D, I>
+where
+	D: Write,
+	I: Write + Seek,
+{
 	/// Creates a new V1-styled writer with the specified `dir` destination and specified `img` destination.
 	pub fn new(dir: &'b mut D, img: &'a mut I) -> Self {
 		Self {
 			dir,
 			img,
-			pos: 0,
+			sector: 0,
 		}
 	}
 }
 
-impl<'a, I> V2Writer<'a, I> {
+impl<'a, I> V2Writer<'a, I>
+where
+	I: Write + Seek,
+{
 	/// Creates a new V2-styled writer with the specified `img` destination.
-	pub fn new(img: &'a mut I) -> Self {
-		Self {
+	/// Immediately writes the V2-styled header with the prefix and (expected) number of entries.
+	pub fn new(img: &'a mut I, entries: usize) -> Result<Self, io::Error> {
+		// Write the fixed header and (expected) number of entries.
+
+		img.seek(SeekFrom::Start(0u64))?;
+
+		img.write_all(&VERSION_2_HEADER)?;
+		img.write_u32::<LittleEndian>(entries as u32)?;
+
+		// Calculate the initial sector accommodating the size of the header.
+
+		let sector = (VERSION_2_HEADER_ENTRY_OFFSET as u64 + (VERSION_2_HEADER_ENTRY_SIZE as u64 * entries as u64)).div_ceil(SECTOR_SIZE);
+
+		Ok(Self {
 			img,
-		}
+			sector,
+			entries,
+			entries_written: 0,
+		})
 	}
 }
 
@@ -58,21 +98,18 @@ where
 	{
 		// Copy the source to the current sector in the archive.
 
-		let pos = self.pos * SECTOR_SIZE;
+		let off = self.sector;
 
-		self.img.seek(io::SeekFrom::Start(pos))?;
+		self.img.seek(io::SeekFrom::Start(off * SECTOR_SIZE))?;
 
-		let bytes = io::copy(src, self.img)?;
+		let len = io::copy(src, self.img)?.div_ceil(SECTOR_SIZE);
 
-		self.pos += 1;
+		self.sector += len;
 
 		// Write the properties of the entry.
 
-		let off = pos as u32;
-		let len = bytes.div_ceil(SECTOR_SIZE) as u32;
-
-		self.dir.write_u32::<LittleEndian>(off)?;
-		self.dir.write_u32::<LittleEndian>(len)?;
+		self.dir.write_u32::<LittleEndian>(off as u32)?;
+		self.dir.write_u32::<LittleEndian>(len as u32)?;
 
 		// Write the name as a null-terminated string.
 
@@ -92,22 +129,62 @@ where
 	where
 		T: Read,
 	{
-		todo!("implementation undecided")
+		// Check if we have capacity for another entry.
+
+		if self.entries_written >= self.entries {
+			return Err(WriteError::InsufficientHeaderSize);
+		}
+
+		// Seek to the offset for the data.
+
+		let off = self.sector;
+
+		self.img.seek(io::SeekFrom::Start(off * SECTOR_SIZE))?;
+
+		// Copy the source to the current sector in the archive.
+
+		let len = io::copy(src, self.img)?.div_ceil(SECTOR_SIZE);
+
+		self.sector += len;
+
+		// Seek to the offset for the header.
+
+		self.img.seek(SeekFrom::Start(VERSION_2_HEADER_ENTRY_OFFSET as u64 + (VERSION_2_HEADER_ENTRY_SIZE as u64 * self.entries_written as u64)))?;
+
+		// Write the properties of the entry.
+
+		self.img.write_u32::<LittleEndian>(off as u32)?;
+		self.img.write_u16::<LittleEndian>(len as u16)?;
+		self.img.write_u16::<LittleEndian>(0u16)?; // Unused (always 0)
+
+		// Write the name as a null-terminated string.
+
+		let name = to_null_terminated(name);
+
+		self.img.write_all(&name)?;
+
+		self.entries_written += 1;
+
+		Ok(())
 	}
 }
 
 fn to_null_terminated(str: &str) -> Vec<u8> {
-	str.chars()
+	#[rustfmt::skip]
+	let bytes = str.chars()
 		.flat_map(u8::try_from)
-		.chain(std::iter::repeat(NULL_TERMINATOR))
-		.take(NAME_SIZE)
+		.chain(std::iter::repeat(NULL_TERMINATOR)).take(NAME_SIZE)
 		.chain(std::iter::once(NULL_TERMINATOR))
-		.collect()
+		.collect();
+
+	bytes
 }
 
 #[cfg(test)]
 mod tests {
 	use std::io::Cursor;
+
+	use crate::{error::WriteError, write::V2Writer};
 
 	use super::{to_null_terminated, V1Writer, Writer};
 
@@ -142,16 +219,61 @@ mod tests {
 		writer.write("VIRGO.DFF", &mut virgo).expect("failed to write first entry");
 		writer.write("LANDSTAL.DFF", &mut landstal).expect("failed to write second entry");
 
-		#[rustfmt::skip]
-		let dir_bytes = vec![
-			0, 0, 0, 0, // Offset
-			1, 0, 0, 0, // Length
-			b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // VIRGO.DFF
-			0, 8, 0, 0, // Offset
-			1, 0, 0, 0, // Length,
-			b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 // LANDSTAL.DFF
-		];
+		let dir_bytes = dir.get_ref();
 
-		assert_eq!(dir.get_ref(), &dir_bytes);
+		assert_eq!(dir_bytes[00..04], [0, 0, 0, 0]); // Offset
+		assert_eq!(dir_bytes[04..08], [1, 0, 0, 0]); // Length
+		assert_eq!(dir_bytes[08..32], [b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // VIRGO.DFF
+
+		assert_eq!(dir_bytes[32..36], [1, 0, 0, 0]); // Offset
+		assert_eq!(dir_bytes[36..40], [1, 0, 0, 0]); // Length
+		assert_eq!(dir_bytes[40..64], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // LANDSTAL.DFF
+
+		let img_bytes = img.get_ref();
+
+		assert_eq!(img_bytes[0000..0009], [b'V', b'I', b'R', b'G', b'O', b'!', b'D', b'F', b'F']); // VIRGO!DFF
+		assert_eq!(img_bytes[2048..2060], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'!', b'D', b'F', b'F']); // LANDSTAL!DFF
+	}
+
+	#[test]
+	pub fn test_write_v2() {
+		let mut img: Cursor<_> = Cursor::new(Vec::new());
+
+		let mut writer = V2Writer::new(&mut img, 2).expect("failed to create writer");
+
+		let mut virgo: Cursor<_> = Cursor::new(include_bytes!("../test/virgo.dff"));
+		let mut landstal: Cursor<_> = Cursor::new(include_bytes!("../test/landstal.dff"));
+
+		writer.write("VIRGO.DFF", &mut virgo).expect("failed to write first entry");
+		writer.write("LANDSTAL.DFF", &mut landstal).expect("failed to write second entry");
+
+		let bytes = img.get_ref();
+
+		assert_eq!(bytes[0..4], [0x56, 0x45, 0x52, 0x32]); // VER2
+		assert_eq!(bytes[4..8], [2, 0, 0, 0]); // Entries
+
+		assert_eq!(bytes[08..12], [1, 0, 0, 0]); // Offset
+		assert_eq!(bytes[12..16], [1, 0, 0, 0]); // Length
+		assert_eq!(bytes[16..20], [2, 0, 0, 0]); // Offset
+		assert_eq!(bytes[20..24], [1, 0, 0, 0]); // Offset
+
+		assert_eq!(bytes[2048..2057], [b'V', b'I', b'R', b'G', b'O', b'!', b'D', b'F', b'F']); // VIRGO!DFF
+		assert_eq!(bytes[4096..4108], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'!', b'D', b'F', b'F']); // VIRGO!DFF
+	}
+
+	#[test]
+	pub fn test_write_v2_space() {
+		let mut img: Cursor<_> = Cursor::new(Vec::new());
+
+		let mut writer = V2Writer::new(&mut img, 1).expect("failed to create writer");
+
+		let mut virgo: Cursor<_> = Cursor::new(include_bytes!("../test/virgo.dff"));
+		let mut landstal: Cursor<_> = Cursor::new(include_bytes!("../test/landstal.dff"));
+
+		let first_write = writer.write("VIRGO.DFF", &mut virgo);
+		let second_write = writer.write("LANDSTAL.DFF", &mut landstal);
+
+		assert!(matches!(first_write, Ok(())));
+		assert!(matches!(second_write, Err(WriteError::InsufficientHeaderSize)));
 	}
 }

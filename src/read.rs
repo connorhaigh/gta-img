@@ -6,13 +6,7 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::{error::ReadError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE};
-
-/// Represents the structure for a V2-style header.
-pub const VERSION_2_HEADER: [u8; 4] = [0x56, 0x45, 0x52, 0x32]; // VER2
-
-/// Represents the length of the structure for a V2-style header; always `4`.
-pub const VERSION_2_HEADER_SIZE: usize = 4;
+use crate::{error::ReadError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE, VERSION_2_HEADER};
 
 /// Represents the length of the name of an entry with the null terminator.
 const NAME_SIZE_NULL_TERMINATOR: usize = NAME_SIZE + 1;
@@ -40,7 +34,10 @@ pub struct Entry {
 
 /// Represents an entry opened for reading.
 #[derive(Debug)]
-pub struct OpenEntry<'a, R> {
+pub struct OpenEntry<'a, R>
+where
+	R: Read + Seek,
+{
 	inner: &'a mut R,
 
 	off: u64,
@@ -50,14 +47,21 @@ pub struct OpenEntry<'a, R> {
 
 /// Represents a reader of V1-styled archives, from both an `img` file and a `dir` file.
 #[derive(Debug)]
-pub struct V1Reader<'a, 'b, D, I> {
+pub struct V1Reader<'a, 'b, D, I>
+where
+	D: Read,
+	I: Read + Seek,
+{
 	dir: &'b mut D,
 	img: &'a mut I,
 }
 
 /// Represents a reader of V2-styled archives, from a single `img` file.
 #[derive(Debug)]
-pub struct V2Reader<'a, I> {
+pub struct V2Reader<'a, I>
+where
+	I: Read + Seek,
+{
 	img: &'a mut I,
 }
 
@@ -67,7 +71,11 @@ pub trait Reader<'a, R> {
 	fn read(self) -> Result<Archive<'a, R>, ReadError>;
 }
 
-impl<'a, 'b, D, I> V1Reader<'a, 'b, D, I> {
+impl<'a, 'b, D, I> V1Reader<'a, 'b, D, I>
+where
+	D: Read,
+	I: Read + Seek,
+{
 	/// Creates a new V1-styled reader with the specified `dir` source and specified `img` source.
 	pub fn new(dir: &'b mut D, img: &'a mut I) -> Self {
 		Self {
@@ -77,7 +85,10 @@ impl<'a, 'b, D, I> V1Reader<'a, 'b, D, I> {
 	}
 }
 
-impl<'a, I> V2Reader<'a, I> {
+impl<'a, I> V2Reader<'a, I>
+where
+	I: Read + Seek,
+{
 	/// Creates a new V2-styled reader with the specified `img` source.
 	pub fn new(img: &'a mut I) -> Self {
 		Self {
@@ -142,7 +153,7 @@ where
 		// Read the header of the archive.
 
 		let header = {
-			let mut buffer = [0; VERSION_2_HEADER_SIZE];
+			let mut buffer = [0; VERSION_2_HEADER.len()];
 
 			self.img.read_exact(&mut buffer)?;
 
@@ -158,6 +169,7 @@ where
 		// Read the (expected) number of entries in the archive.
 
 		let count = self.img.read_u32::<LittleEndian>()? as usize;
+
 		let mut entries: Vec<Entry> = Vec::with_capacity(count);
 
 		for _ in 0..count {
@@ -235,7 +247,7 @@ where
 	R: Read + Seek,
 {
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-		// Check if we are not at EoF (for the entry).
+		// Check if we have already reached the end of the entry.
 
 		if self.pos >= self.len {
 			return Ok(0);
@@ -248,12 +260,12 @@ where
 		// Calculate the maximum possible number of bytes to read for the entry, to forbid reading beyond it.
 		// Includes the number of bytes already read, honouring the length of the entry and the length of the buffer.
 
-		let max = (self.len - self.pos.min(self.len)).min(buf.len() as u64) as usize;
-		let read = self.inner.read(&mut buf[0..max])?;
+		let len = (self.len - self.pos.min(self.len)).min(buf.len() as u64) as usize;
+		let off = self.inner.read(&mut buf[0..len])?;
 
-		self.pos += read as u64;
+		self.pos += off as u64;
 
-		Ok(read)
+		Ok(off)
 	}
 }
 
@@ -276,7 +288,12 @@ impl<'a, I> PartialOrd for Archive<'a, I> {
 }
 
 fn from_null_terminated(buf: &[u8]) -> String {
-	let pos = buf.iter().position(|&b| b == NULL_TERMINATOR).unwrap_or(buf.len()).min(NAME_SIZE_NULL_TERMINATOR);
+	#[rustfmt::skip]
+	let pos = buf.iter()
+		.position(|&b| b == NULL_TERMINATOR)
+		.unwrap_or(buf.len())
+		.min(NAME_SIZE_NULL_TERMINATOR);
+
 	let str = buf.iter().map(|&b| char::from(b)).take(pos).collect();
 
 	str
@@ -340,11 +357,11 @@ mod tests {
 		let mut archive: Archive<_> = V1Reader::new(&mut dir, &mut img).read().expect("failed to read archive");
 		let mut virgo = archive.open(0).expect("expected first entry");
 
-		let mut buf = [0; 8];
-		let len = virgo.read(&mut buf).expect("failed to read entry");
+		let mut buf = Vec::new();
+		let len = virgo.read_to_end(&mut buf).expect("failed to read entry");
 
-		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // Virgo-v1
-		assert_eq!(len, 8);
+		assert_eq!(buf[0..8], [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'1']); // Virgo-v1
+		assert_eq!(len, 2048);
 	}
 
 	#[test]
@@ -379,11 +396,11 @@ mod tests {
 		let mut archive: Archive<_> = V2Reader::new(&mut img).read().expect("failed to read archive");
 		let mut virgo = archive.open(0).expect("expected first entry");
 
-		let mut buf = [0; 8];
-		let len = virgo.read(&mut buf).expect("failed to read entry");
+		let mut buf = Vec::new();
+		let len = virgo.read_to_end(&mut buf).expect("failed to read entry");
 
-		assert_eq!(buf, [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'2']); // Virgo-v2
-		assert_eq!(len, 8);
+		assert_eq!(buf[0..8], [b'V', b'i', b'r', b'g', b'o', b'-', b'v', b'2']); // Virgo-v2
+		assert_eq!(len, 2048);
 	}
 
 	#[test]
