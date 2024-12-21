@@ -13,6 +13,6 @@ fn main() {
 		.expect("failed to read archive")
 		.iter()
 		.for_each(|entry| {
-			println!("{} - offset: {}, length: {}", entry.name, entry.off, entry.len);
+			println!("{} - offset: {}, length: {}", entry.name, entry.offset, entry.length);
 		})
 }

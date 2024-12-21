@@ -105,7 +105,7 @@ fn main() {
 			println!("Inspecting contents of archive...");
 
 			for entry in archive.iter() {
-				println!("[{:<24}] offset: {}, length: {}", entry.name, entry.off, entry.len);
+				println!("[{:<24}] offset: {}, length: {}", entry.name, entry.offset, entry.length);
 			}
 
 			println!("Inspected {} entries.", archive.len());

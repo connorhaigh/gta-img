@@ -26,10 +26,10 @@ pub struct Entry {
 	pub name: String,
 
 	/// The offset, in sectors, of the entry.
-	pub off: u64,
+	pub offset: u64,
 
 	/// The length, in sectors, of the entry.
-	pub len: u64,
+	pub length: u64,
 }
 
 /// Represents an entry opened for reading.
@@ -40,9 +40,10 @@ where
 {
 	inner: &'a mut R,
 
-	off: u64,
-	len: u64,
-	pos: u64,
+	offset: u64,
+	length: u64,
+
+	position: u64,
 }
 
 /// Represents a reader of V1-styled archives, from both an `img` file and a `dir` file.
@@ -109,17 +110,17 @@ where
 			// Attempt to read the offset for the next entry, however graciously handle an EOF.
 			// Return any other kind of errors as normal.
 
-			let off = match self.dir.read_u32::<LittleEndian>() {
-				Ok(off) => off as u64,
-				Err(err) => match err.kind() {
+			let offset = match self.dir.read_u32::<LittleEndian>() {
+				Ok(offset) => offset as u64,
+				Err(error) => match error.kind() {
 					io::ErrorKind::UnexpectedEof => break,
-					_ => return Err(err.into()),
+					_ => return Err(error.into()),
 				},
 			};
 
 			// Read the properties of the entry.
 
-			let len = self.dir.read_u32::<LittleEndian>()? as u64;
+			let length = self.dir.read_u32::<LittleEndian>()? as u64;
 
 			// Read the name as a null-terminated string.
 
@@ -127,8 +128,8 @@ where
 
 			entries.push(Entry {
 				name,
-				off,
-				len,
+				offset,
+				length,
 			})
 		}
 
@@ -144,17 +145,11 @@ where
 	I: Read + Seek,
 {
 	fn read(self) -> Result<Archive<'a, I>, ReadError> {
-		// Read the header of the archive.
+		// Read and check the header of the archive is in the expected format.
 
-		let header = {
-			let mut buffer = [0; VERSION_2_HEADER.len()];
+		let mut header = [0; VERSION_2_HEADER.len()];
 
-			self.img.read_exact(&mut buffer)?;
-
-			buffer
-		};
-
-		// Check if the header is of the expected format.
+		self.img.read_exact(&mut header)?;
 
 		if header != VERSION_2_HEADER {
 			return Err(ReadError::InvalidHeader);
@@ -169,8 +164,8 @@ where
 		for _ in 0..count {
 			// Read the properties of the entry.
 
-			let off = self.img.read_u32::<LittleEndian>()? as u64;
-			let len = self.img.read_u16::<LittleEndian>()? as u64;
+			let offset = self.img.read_u32::<LittleEndian>()? as u64;
+			let length = self.img.read_u16::<LittleEndian>()? as u64;
 			let _ = self.img.read_u16::<LittleEndian>()?; // Unused (always 0)
 
 			// Read the name as a null-terminated string.
@@ -179,8 +174,8 @@ where
 
 			entries.push(Entry {
 				name,
-				off,
-				len,
+				offset,
+				length,
 			})
 		}
 
@@ -223,9 +218,9 @@ where
 
 		Some(OpenEntry {
 			inner: self.inner,
-			off: entry.off * SECTOR_SIZE,
-			len: entry.len * SECTOR_SIZE,
-			pos: 0,
+			offset: entry.offset * SECTOR_SIZE,
+			length: entry.length * SECTOR_SIZE,
+			position: 0,
 		})
 	}
 }
@@ -237,23 +232,23 @@ where
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
 		// Check if we have already reached the end of the entry.
 
-		if self.pos >= self.len {
+		if self.position >= self.length {
 			return Ok(0);
 		}
 
 		// Seek to the start of the entry including any currently read bytes.
 
-		self.inner.seek(io::SeekFrom::Start(self.off + self.pos))?;
+		self.inner.seek(io::SeekFrom::Start(self.offset + self.position))?;
 
 		// Calculate the maximum possible number of bytes to read for the entry, to forbid reading beyond it.
 		// Includes the number of bytes already read, honouring the length of the entry and the length of the buffer.
 
-		let len = (self.len - self.pos.min(self.len)).min(buf.len() as u64) as usize;
-		let off = self.inner.read(&mut buf[0..len])?;
+		let length = (self.length - self.position.min(self.length)).min(buf.len() as u64) as usize;
+		let offset = self.inner.read(&mut buf[0..length])?;
 
-		self.pos += off as u64;
+		self.position += offset as u64;
 
-		Ok(off)
+		Ok(offset)
 	}
 }
 
@@ -333,16 +328,16 @@ mod tests {
 		let test = archive.get(2).expect("expected third entry");
 
 		assert_eq!(virgo.name, "VIRGO.DFF");
-		assert_eq!(virgo.off, 0);
-		assert_eq!(virgo.len, 1);
+		assert_eq!(virgo.offset, 0);
+		assert_eq!(virgo.length, 1);
 
 		assert_eq!(landstal.name, "LANDSTAL.DFF");
-		assert_eq!(landstal.off, 1);
-		assert_eq!(landstal.len, 2);
+		assert_eq!(landstal.offset, 1);
+		assert_eq!(landstal.length, 2);
 
 		assert_eq!(test.name, "abcdefghijklmnopqrstuvwx");
-		assert_eq!(test.off, 3);
-		assert_eq!(test.len, 8);
+		assert_eq!(test.offset, 3);
+		assert_eq!(test.length, 8);
 	}
 
 	#[test]
@@ -373,16 +368,16 @@ mod tests {
 		let longer = archive.get(2).expect("expected third entry");
 
 		assert_eq!(virgo.name, "VIRGO.DFF");
-		assert_eq!(virgo.off, 1);
-		assert_eq!(virgo.len, 1);
+		assert_eq!(virgo.offset, 1);
+		assert_eq!(virgo.length, 1);
 
 		assert_eq!(landstal.name, "LANDSTAL.DFF");
-		assert_eq!(landstal.off, 2);
-		assert_eq!(landstal.len, 1);
+		assert_eq!(landstal.offset, 2);
+		assert_eq!(landstal.length, 1);
 
 		assert_eq!(longer.name, "abcdefghijklmnopqrstuvwx");
-		assert_eq!(longer.off, 3);
-		assert_eq!(longer.len, 8);
+		assert_eq!(longer.offset, 3);
+		assert_eq!(longer.length, 8);
 	}
 
 	#[test]

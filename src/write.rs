@@ -98,9 +98,9 @@ where
 	{
 		// Seek to the offset for the data.
 
-		let sector_offset = self.sector;
+		let offset = self.sector;
 
-		self.img.seek(io::SeekFrom::Start(sector_offset * SECTOR_SIZE))?;
+		self.img.seek(io::SeekFrom::Start(offset * SECTOR_SIZE))?;
 
 		// Copy the source to the current sector in the archive.
 
@@ -108,21 +108,21 @@ where
 
 		// Pad the remainder as necessary.
 
-		let sector_length = bytes.div_ceil(SECTOR_SIZE);
-		let remainder = remainder_padded_bytes(sector_length, bytes);
+		let length = bytes.div_ceil(SECTOR_SIZE);
+		let remainder = remainder_padded_bytes(length, bytes);
 
 		self.img.write_all(&remainder)?;
 
 		// Write the properties of the entry.
 
-		self.dir.write_u32::<LittleEndian>(sector_offset as u32)?;
-		self.dir.write_u32::<LittleEndian>(sector_length as u32)?;
+		self.dir.write_u32::<LittleEndian>(offset as u32)?;
+		self.dir.write_u32::<LittleEndian>(length as u32)?;
 
 		// Write the name as a null-terminated string.
 
 		self.dir.write_all(&to_null_terminated(name))?;
 
-		self.sector += sector_length;
+		self.sector += length;
 
 		Ok(())
 	}
@@ -144,9 +144,9 @@ where
 
 		// Seek to the offset for the data.
 
-		let sector_offset = self.sector;
+		let offset = self.sector;
 
-		self.img.seek(io::SeekFrom::Start(sector_offset * SECTOR_SIZE))?;
+		self.img.seek(io::SeekFrom::Start(offset * SECTOR_SIZE))?;
 
 		// Copy the source to the current sector in the archive.
 
@@ -154,8 +154,8 @@ where
 
 		// Pad the remainder as necessary.
 
-		let sector_length = bytes.div_ceil(SECTOR_SIZE);
-		let remainder = remainder_padded_bytes(sector_length, bytes);
+		let length = bytes.div_ceil(SECTOR_SIZE);
+		let remainder = remainder_padded_bytes(length, bytes);
 
 		self.img.write_all(&remainder)?;
 
@@ -166,15 +166,15 @@ where
 
 		// Write the properties of the entry.
 
-		self.img.write_u32::<LittleEndian>(sector_offset as u32)?;
-		self.img.write_u16::<LittleEndian>(sector_length as u16)?;
+		self.img.write_u32::<LittleEndian>(offset as u32)?;
+		self.img.write_u16::<LittleEndian>(length as u16)?;
 		self.img.write_u16::<LittleEndian>(0u16)?; // Unused (always 0)
 
 		// Write the name as a null-terminated string.
 
 		self.img.write_all(&to_null_terminated(name))?;
 
-		self.sector += sector_length;
+		self.sector += length;
 		self.written += 1;
 
 		Ok(())
@@ -182,7 +182,7 @@ where
 }
 
 fn remainder_padded_bytes(sectors: u64, bytes: u64) -> Vec<u8> {
-	vec![0; ((sectors * SECTOR_SIZE) - bytes) as usize]
+	vec![0; ((sectors * SECTOR_SIZE).saturating_sub(bytes)) as usize]
 }
 
 fn to_null_terminated(string: &str) -> Vec<u8> {
