@@ -87,7 +87,7 @@ where
 	}
 }
 
-impl<'a, 'b, D, I> Writer for V1Writer<'a, 'b, D, I>
+impl<D, I> Writer for V1Writer<'_, '_, D, I>
 where
 	D: Write,
 	I: Write + Seek,
@@ -128,7 +128,7 @@ where
 	}
 }
 
-impl<'a, I> Writer for V2Writer<'a, I>
+impl<I> Writer for V2Writer<'_, I>
 where
 	I: Write + Seek,
 {

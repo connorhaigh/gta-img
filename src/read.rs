@@ -98,7 +98,7 @@ where
 	}
 }
 
-impl<'a, 'b, D, I> Reader<'a, I> for V1Reader<'a, 'b, D, I>
+impl<'a, D, I> Reader<'a, I> for V1Reader<'a, '_, D, I>
 where
 	D: Read,
 	I: Read + Seek,
@@ -186,7 +186,7 @@ where
 	}
 }
 
-impl<'a, I> Archive<'a, I> {
+impl<I> Archive<'_, I> {
 	/// Returns the number of entries in the archive.
 	pub fn len(&self) -> usize {
 		self.entries.len()
@@ -208,7 +208,7 @@ impl<'a, I> Archive<'a, I> {
 	}
 }
 
-impl<'a, I> Archive<'a, I>
+impl<I> Archive<'_, I>
 where
 	I: Read + Seek,
 {
@@ -225,7 +225,7 @@ where
 	}
 }
 
-impl<'a, R> Read for OpenEntry<'a, R>
+impl<R> Read for OpenEntry<'_, R>
 where
 	R: Read + Seek,
 {
@@ -252,19 +252,19 @@ where
 	}
 }
 
-impl<'a, I> Hash for Archive<'a, I> {
+impl<I> Hash for Archive<'_, I> {
 	fn hash<H: hash::Hasher>(&self, state: &mut H) {
 		self.entries.hash(state);
 	}
 }
 
-impl<'a, I> PartialEq for Archive<'a, I> {
+impl<I> PartialEq for Archive<'_, I> {
 	fn eq(&self, other: &Self) -> bool {
 		self.entries == other.entries
 	}
 }
 
-impl<'a, I> PartialOrd for Archive<'a, I> {
+impl<I> PartialOrd for Archive<'_, I> {
 	fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
 		self.entries.partial_cmp(&other.entries)
 	}
@@ -278,6 +278,7 @@ where
 
 	let mut buf = [0; NAME_SIZE_NULL_TERMINATOR];
 
+	#[allow(clippy::unused_io_amount)]
 	inner.read(&mut buf)?;
 
 	// Determine the position of the null terminator and build a string from it.
