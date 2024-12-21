@@ -1,4 +1,4 @@
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
 
@@ -34,7 +34,7 @@ where
 	sector: u64,
 
 	entries: usize,
-	entries_written: usize,
+	written: usize,
 }
 
 /// Represents a generic archive writer that can persist archives.
@@ -69,7 +69,7 @@ where
 	pub fn new(img: &'a mut I, entries: usize) -> Result<Self, io::Error> {
 		// Write the fixed header and (expected) number of entries.
 
-		img.seek(SeekFrom::Start(0u64))?;
+		img.seek(io::SeekFrom::Start(0u64))?;
 
 		img.write_all(&VERSION_2_HEADER)?;
 		img.write_u32::<LittleEndian>(entries as u32)?;
@@ -82,7 +82,7 @@ where
 			img,
 			sector,
 			entries,
-			entries_written: 0,
+			written: 0,
 		})
 	}
 }
@@ -96,26 +96,35 @@ where
 	where
 		T: Read,
 	{
+		// Seek to the offset for the data.
+
+		let sector_offset = self.sector;
+
+		self.img.seek(io::SeekFrom::Start(sector_offset * SECTOR_SIZE))?;
+
 		// Copy the source to the current sector in the archive.
 
-		let off = self.sector;
+		let bytes = io::copy(src, self.img)?;
 
-		self.img.seek(io::SeekFrom::Start(off * SECTOR_SIZE))?;
+		// Pad the remainder as necessary.
 
-		let len = io::copy(src, self.img)?.div_ceil(SECTOR_SIZE);
+		let sector_length = bytes.div_ceil(SECTOR_SIZE);
+		let remainder = remainder_padded_bytes(sector_length, bytes);
 
-		self.sector += len;
+		self.img.write_all(&remainder)?;
 
 		// Write the properties of the entry.
 
-		self.dir.write_u32::<LittleEndian>(off as u32)?;
-		self.dir.write_u32::<LittleEndian>(len as u32)?;
+		self.dir.write_u32::<LittleEndian>(sector_offset as u32)?;
+		self.dir.write_u32::<LittleEndian>(sector_length as u32)?;
 
 		// Write the name as a null-terminated string.
 
 		let name = to_null_terminated(name);
 
 		self.dir.write_all(&name)?;
+
+		self.sector += sector_length;
 
 		Ok(())
 	}
@@ -131,30 +140,36 @@ where
 	{
 		// Check if we have capacity for another entry.
 
-		if self.entries_written >= self.entries {
+		if self.written >= self.entries {
 			return Err(WriteError::InsufficientHeaderSize);
 		}
 
 		// Seek to the offset for the data.
 
-		let off = self.sector;
+		let sector_offset = self.sector;
 
-		self.img.seek(io::SeekFrom::Start(off * SECTOR_SIZE))?;
+		self.img.seek(io::SeekFrom::Start(sector_offset * SECTOR_SIZE))?;
 
 		// Copy the source to the current sector in the archive.
 
-		let len = io::copy(src, self.img)?.div_ceil(SECTOR_SIZE);
+		let bytes = io::copy(src, self.img)?;
 
-		self.sector += len;
+		// Pad the remainder as necessary.
+
+		let sector_length = bytes.div_ceil(SECTOR_SIZE);
+		let remainder = remainder_padded_bytes(sector_length, bytes);
+
+		self.img.write_all(&remainder)?;
 
 		// Seek to the offset for the header.
 
-		self.img.seek(SeekFrom::Start(VERSION_2_HEADER_ENTRY_OFFSET as u64 + (VERSION_2_HEADER_ENTRY_SIZE as u64 * self.entries_written as u64)))?;
+		self.img
+			.seek(io::SeekFrom::Start(VERSION_2_HEADER_ENTRY_OFFSET as u64 + (VERSION_2_HEADER_ENTRY_SIZE as u64 * self.written as u64)))?;
 
 		// Write the properties of the entry.
 
-		self.img.write_u32::<LittleEndian>(off as u32)?;
-		self.img.write_u16::<LittleEndian>(len as u16)?;
+		self.img.write_u32::<LittleEndian>(sector_offset as u32)?;
+		self.img.write_u16::<LittleEndian>(sector_length as u16)?;
 		self.img.write_u16::<LittleEndian>(0u16)?; // Unused (always 0)
 
 		// Write the name as a null-terminated string.
@@ -163,15 +178,20 @@ where
 
 		self.img.write_all(&name)?;
 
-		self.entries_written += 1;
+		self.sector += sector_length;
+		self.written += 1;
 
 		Ok(())
 	}
 }
 
-fn to_null_terminated(str: &str) -> Vec<u8> {
+fn remainder_padded_bytes(sectors: u64, bytes: u64) -> Vec<u8> {
+	vec![0; ((sectors * SECTOR_SIZE) - bytes) as usize]
+}
+
+fn to_null_terminated(string: &str) -> Vec<u8> {
 	#[rustfmt::skip]
-	let bytes = str.chars()
+	let bytes = string.chars()
 		.flat_map(u8::try_from)
 		.chain(std::iter::repeat(NULL_TERMINATOR)).take(NAME_SIZE)
 		.chain(std::iter::once(NULL_TERMINATOR))
@@ -233,6 +253,8 @@ mod tests {
 
 		assert_eq!(img_bytes[0000..0009], [b'V', b'I', b'R', b'G', b'O', b'!', b'D', b'F', b'F']); // VIRGO!DFF
 		assert_eq!(img_bytes[2048..2060], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'!', b'D', b'F', b'F']); // LANDSTAL!DFF
+
+		assert_eq!(img_bytes.len(), 4096);
 	}
 
 	#[test]
@@ -259,6 +281,8 @@ mod tests {
 
 		assert_eq!(bytes[2048..2057], [b'V', b'I', b'R', b'G', b'O', b'!', b'D', b'F', b'F']); // VIRGO!DFF
 		assert_eq!(bytes[4096..4108], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'!', b'D', b'F', b'F']); // VIRGO!DFF
+
+		assert_eq!(bytes.len(), 6144);
 	}
 
 	#[test]
