@@ -8,7 +8,7 @@ use crate::{error::WriteError, NAME_SIZE, NULL_TERMINATOR, SECTOR_SIZE, VERSION_
 const VERSION_2_HEADER_ENTRY_OFFSET: usize = 8;
 
 /// Represents the size of an individual entry in the header of a V2-styled archive.
-const VERSION_2_HEADER_ENTRY_SIZE: usize = 8;
+const VERSION_2_HEADER_ENTRY_SIZE: usize = 32;
 
 /// Represents a writer of V1-styled archives, to both an `img` file and a `dir` file.
 #[derive(Debug)]
@@ -120,9 +120,7 @@ where
 
 		// Write the name as a null-terminated string.
 
-		let name = to_null_terminated(name);
-
-		self.dir.write_all(&name)?;
+		self.dir.write_all(&to_null_terminated(name))?;
 
 		self.sector += sector_length;
 
@@ -174,9 +172,7 @@ where
 
 		// Write the name as a null-terminated string.
 
-		let name = to_null_terminated(name);
-
-		self.img.write_all(&name)?;
+		self.img.write_all(&to_null_terminated(name))?;
 
 		self.sector += sector_length;
 		self.written += 1;
@@ -276,8 +272,11 @@ mod tests {
 
 		assert_eq!(bytes[08..12], [1, 0, 0, 0]); // Offset
 		assert_eq!(bytes[12..16], [1, 0, 0, 0]); // Length
-		assert_eq!(bytes[16..20], [2, 0, 0, 0]); // Offset
-		assert_eq!(bytes[20..24], [1, 0, 0, 0]); // Offset
+		assert_eq!(bytes[16..40], [b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // VIRGO.DFF
+
+		assert_eq!(bytes[40..44], [2, 0, 0, 0]); // Offset
+		assert_eq!(bytes[44..48], [1, 0, 0, 0]); // Length
+		assert_eq!(bytes[48..72], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'.', b'D', b'F', b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // LANDSTAL.DFF
 
 		assert_eq!(bytes[2048..2057], [b'V', b'I', b'R', b'G', b'O', b'!', b'D', b'F', b'F']); // VIRGO!DFF
 		assert_eq!(bytes[4096..4108], [b'L', b'A', b'N', b'D', b'S', b'T', b'A', b'L', b'!', b'D', b'F', b'F']); // VIRGO!DFF

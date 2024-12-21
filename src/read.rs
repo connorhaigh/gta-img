@@ -67,7 +67,7 @@ where
 
 /// Represents a generic archive reader that can produce archives.
 pub trait Reader<'a, R> {
-	/// Attempts to fully read an entire archive.
+	/// Attempts to fully read an entire archive, consuming `self` in the process.
 	fn read(self) -> Result<Archive<'a, R>, ReadError>;
 }
 
@@ -123,13 +123,7 @@ where
 
 			// Read the name as a null-terminated string.
 
-			let name = {
-				let mut buf = [0; NAME_SIZE_NULL_TERMINATOR];
-
-				self.dir.read_exact(&mut buf)?;
-
-				from_null_terminated(&buf)
-			};
+			let name = read_null_terminated(self.dir)?;
 
 			entries.push(Entry {
 				name,
@@ -181,13 +175,7 @@ where
 
 			// Read the name as a null-terminated string.
 
-			let name = {
-				let mut buf = [0; NAME_SIZE_NULL_TERMINATOR];
-
-				self.img.read_exact(&mut buf)?;
-
-				from_null_terminated(&buf)
-			};
+			let name = read_null_terminated(self.img)?;
 
 			entries.push(Entry {
 				name,
@@ -287,16 +275,22 @@ impl<'a, I> PartialOrd for Archive<'a, I> {
 	}
 }
 
-fn from_null_terminated(buf: &[u8]) -> String {
-	#[rustfmt::skip]
-	let pos = buf.iter()
-		.position(|&b| b == NULL_TERMINATOR)
-		.unwrap_or(buf.len())
-		.min(NAME_SIZE_NULL_TERMINATOR);
+fn read_null_terminated<T>(inner: &mut T) -> Result<String, io::Error>
+where
+	T: Read,
+{
+	// Read the bytes for the string.
 
+	let mut buf = [0; NAME_SIZE_NULL_TERMINATOR];
+
+	inner.read(&mut buf)?;
+
+	// Determine the position of the null terminator and build a string from it.
+
+	let pos = buf.iter().position(|&b| b == NULL_TERMINATOR).unwrap_or(buf.len()).min(NAME_SIZE_NULL_TERMINATOR);
 	let str = buf.iter().map(|&b| char::from(b)).take(pos).collect();
 
-	str
+	Ok(str)
 }
 
 #[cfg(test)]
@@ -305,22 +299,24 @@ mod tests {
 
 	use crate::read::{Reader, V1Reader, V2Reader};
 
-	use super::{from_null_terminated, Archive};
-
-	#[test]
-	fn test_to_name_truncate() {
-		let slice = vec![b'S', b'o', b'm', b'e', b'b', b'o', b'd', b'y', b'O', b'n', b'c', b'e', b'T', b'o', b'l', b'd', b'M', b'e', b'W', b'o', b'r', b'l', b'd', b'G', b'o', b'n', b'n', b'a', b'R', b'o', b'l', b'l', b'M', b'e', 0]; // SomebodyOnceToldMeWorldGonnaRollMe
-		let string = from_null_terminated(&slice);
-
-		assert_eq!(string, "SomebodyOnceToldMeWorldG");
-	}
+	use super::{read_null_terminated, Archive};
 
 	#[test]
 	fn test_to_name() {
-		let slice = vec![b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0]; // VIRGO.DFF
-		let string = from_null_terminated(&slice);
+		let mut cursor = Cursor::new(vec![b'V', b'I', b'R', b'G', b'O', b'.', b'D', b'F', b'F', 0]); // VIRGO.DFF
+		let string = read_null_terminated(&mut cursor).expect("failed to read string");
 
 		assert_eq!(string, "VIRGO.DFF");
+	}
+
+	#[test]
+	fn test_to_name_truncate() {
+		let mut cursor =
+			Cursor::new(vec![b'S', b'o', b'm', b'e', b'b', b'o', b'd', b'y', b'O', b'n', b'c', b'e', b'T', b'o', b'l', b'd', b'M', b'e', b'W', b'o', b'r', b'l', b'd', b'G', b'o', b'n', b'n', b'a', b'R', b'o', b'l', b'l', b'M', b'e', 0]); // SomebodyOnceToldMeWorldGonnaRollMe
+
+		let string = read_null_terminated(&mut cursor).expect("failed to read string");
+
+		assert_eq!(string, "SomebodyOnceToldMeWorldG");
 	}
 
 	#[test]
